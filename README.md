@@ -13,13 +13,21 @@ You also should not drop the oneshot Reciever if using the send() function.
 
 example benchmark comparing `ajsonrpc` with the `web3` library.  
 Ran on a Ryzen 5 26000x and `geth` was on a Ryzen 9 5950x. All requests were `eth_syncing` requests.  
+  
 1 million requests were made concurrently.
 
 | ajsonrpc                |  web3                |
 |-------------------------|:--------------------:|
 | 36.1s                   |  72.7s               |
 
-`ajsonrpc` is 2.1x faster than `web3` in this case.
+`ajsonrpc` is 2.1x faster than `web3` in this case.  
+
+100 concurrent requests:
+| ajsonrpc                |  web3                |  http (reqwests)                |
+|-------------------------|:--------------------:|:-------------------------------:|
+| 3.1792ms                |   5.5222ms           |  20.674ms                       |
+
+"normal" http requests are 8x slower than `ajsonrpc`
 
 ## Usage
 Add this to your `Cargo.toml`:
