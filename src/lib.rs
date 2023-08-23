@@ -1,4 +1,4 @@
-use std::{collections::HashMap, error::Error, sync::Arc};
+use std::{collections::HashMap, error::Error, sync::Arc, time::Duration};
 use futures::{stream::SplitSink, StreamExt, SinkExt};
 use tokio_tungstenite::{WebSocketStream, MaybeTlsStream, tungstenite::Message};
 use tracing;
@@ -7,6 +7,11 @@ use url::Url;
 
 
 fn drop<T>(_: T) {}
+
+pub enum WsError {
+    Timeout,
+    Other(Box<dyn Error>),
+}
 
 struct WriteReqmap {
     ws_write: SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>,
@@ -69,20 +74,25 @@ impl WsRouter {
     }
 
     // make sure that the payload_id is the same id your using in your json rpc request
-    pub async fn send(&self, req: String, payload_id: u64) -> Result<oneshot::Receiver<String>, Box<dyn Error>> {
+    pub async fn send(&self, req: String, payload_id: u64) -> Result<oneshot::Receiver<String>, WsError> {
 
         let (tx, rx) = oneshot::channel();
         let req = Message::Text(req);
         let mut write_reqmap = self.write_reqmap.lock().await;
         write_reqmap.reqmap.insert(payload_id, tx);
         // send the req to the node
-        write_reqmap.ws_write.send(req).await?;
+        write_reqmap.ws_write.send(req).await.map_err(|e| WsError::Other(Box::new(e)))?;
         drop(write_reqmap); // drop here to yield the lock as soon as possible
         Ok(rx)
     }
 
     // makes + waits for response
-    pub async fn make_request(&self, req: String, payload_id: u64) -> Result<String, Box<dyn Error>> {
-        Ok(self.send(req, payload_id).await?.await?)
+    pub async fn make_request(&self, req: String, payload_id: u64) -> Result<String, WsError> {
+        Ok(self.send(req, payload_id).await?.await.map_err(|e| WsError::Other(Box::new(e))))?
+    }
+
+    pub async fn make_request_timeout(&self, req: String, payload_id: u64, timeout: Duration) -> Result<String, WsError> {
+        let rx = self.send(req, payload_id).await?;
+        tokio::time::timeout(timeout, rx).await.map_err(|_| WsError::Timeout)?.map_err(|e| WsError::Other(Box::new(e)))
     }
 }
