@@ -1,9 +1,10 @@
-use std::{collections::HashMap, error::Error, sync::Arc, time::Duration};
-use futures::{stream::SplitSink, StreamExt, SinkExt};
+use std::{collections::HashMap, error::Error, sync::Arc, time::Duration, str::FromStr};
+use futures::{stream::SplitSink, SinkExt};
+use futures_util::StreamExt;
 use tokio_tungstenite::{WebSocketStream, MaybeTlsStream, tungstenite::Message};
 use tracing;
 use tokio::{sync::oneshot, net::TcpStream, sync::Mutex};
-use url::Url;
+use http::{Request, Uri};
 
 
 fn drop<T>(_: T) {}
@@ -24,7 +25,7 @@ pub struct WsRouter {
 
 impl WsRouter {
     pub async fn new(node: String) -> Result<WsRouter, Box<dyn Error>> {
-        let url = Url::parse(&node).unwrap();
+        let url = Uri::from_str(&node)?;
 
         let (ws, _) = tokio_tungstenite::connect_async(url).await?;
         let (ws_write, ws_read) = ws.split();
@@ -72,6 +73,69 @@ impl WsRouter {
 
         Ok(router)
     }
+
+     pub async fn new_with_jwt(node: String, jwt: String) -> Result<WsRouter, Box<dyn Error>> {
+        let url = Uri::from_str(&node)?;
+
+        let request = Request::builder()
+            .method("GET")
+            .uri(&url)
+            .header("Upgrade", "websocket")
+            .header("Connection", "Upgrade")
+            .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .header("Sec-WebSocket-Version", "13")
+            .header("Authorization", format!("Bearer {}", jwt))
+            .header("Host", url.host().unwrap())
+            .body(())?;
+            
+
+        let (ws, _) = tokio_tungstenite::connect_async(request).await?;
+        let (ws_write, ws_read) = ws.split();
+        tracing::info!("Websocket connection to {} established.", node);
+
+        let write_reqmap = Arc::new(Mutex::new(WriteReqmap{
+            ws_write,
+            reqmap: HashMap::new(),
+        }));
+        let write_reqmap_clone = write_reqmap.clone(); // Clone for closure
+
+        let router = WsRouter{
+            write_reqmap: write_reqmap,
+        };
+        
+        let read_loop = ws_read.for_each_concurrent(None, move |msg| {
+            let write_reqmap = write_reqmap_clone.clone(); // Clone for closure
+            
+            async move {
+                match msg {
+                    Ok(msg) => {
+                        let msg = msg.into_text().unwrap();
+                        if msg.is_empty() {
+                            return;
+                        }
+
+                        let resp: serde_json::Value  = serde_json::from_str(&msg).unwrap();
+
+                        let payload_id = resp["id"].as_str().unwrap().parse::<u64>().unwrap();
+                        
+                        if let Some(tx) = write_reqmap.lock().await.reqmap.remove(&payload_id) {
+                            tx.send(msg).unwrap();
+                        } else {
+                            tracing::warn!("No corresponding sender found for payload_id: {}", payload_id);
+                        }
+                    },
+                    Err(e) => {
+                        tracing::error!("Error reading message: {}", e);
+                    }
+                }
+            }
+        });
+
+        tokio::spawn(read_loop);
+
+        Ok(router)
+    }
+
 
     // make sure that the payload_id is the same id your using in your json rpc request
     pub async fn send(&self, req: String, payload_id: u64) -> Result<oneshot::Receiver<String>, WsError> {
