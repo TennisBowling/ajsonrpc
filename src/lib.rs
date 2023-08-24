@@ -48,16 +48,48 @@ impl WsRouter {
                 match msg {
                     Ok(msg) => {
                         let msg = msg.into_text().unwrap();
+
                         if msg.is_empty() {
                             return;
                         }
 
-                        let resp: serde_json::Value  = serde_json::from_str(&msg).unwrap();
+                        let resp: Result<serde_json::Value, serde_json::Error>  = serde_json::from_str(&msg);
+                        let resp = match resp {
+                            Ok(resp) => resp,
+                            Err(e) => {
+                                tracing::error!("Error parsing message: {}", e);
+                                return;
+                            }
+                        };
 
-                        let payload_id = resp["id"].as_str().unwrap().parse::<u64>().unwrap();
-                        
+                        // Payload ID can come in as "1" or just 1
+                        let payload_id: u64 = match &resp["id"] {
+                            serde_json::Value::Number(number) => {
+                                if let Some(payload_id) = number.as_u64() {
+                                    payload_id
+                                } else {
+                                    tracing::error!("Invalid payload ID format: {}", number);
+                                    return;
+                                }
+                            }
+                            serde_json::Value::String(s) => match s.parse::<u64>() {
+                                Ok(parsed_id) => parsed_id,
+                                Err(e) => {
+                                    tracing::error!("Error parsing payload ID as u64: {}", e);
+                                    return;
+                                }
+                            },
+                            _ => {
+                                tracing::error!("Unexpected payload ID format: {:?}", resp["id"]);
+                                return;
+                            }
+                        };
+
                         if let Some(tx) = write_reqmap.lock().await.reqmap.remove(&payload_id) {
-                            tx.send(msg).unwrap();
+                            let channelres = tx.send(msg);
+                            if let Err(e) = channelres {
+                                tracing::error!("Error sending message to channel: {}", e);
+                            }
                         } else {
                             tracing::warn!("No corresponding sender found for payload_id: {}", payload_id);
                         }
@@ -110,16 +142,48 @@ impl WsRouter {
                 match msg {
                     Ok(msg) => {
                         let msg = msg.into_text().unwrap();
+
                         if msg.is_empty() {
                             return;
                         }
 
-                        let resp: serde_json::Value  = serde_json::from_str(&msg).unwrap();
+                        let resp: Result<serde_json::Value, serde_json::Error>  = serde_json::from_str(&msg);
+                        let resp = match resp {
+                            Ok(resp) => resp,
+                            Err(e) => {
+                                tracing::error!("Error parsing message: {}", e);
+                                return;
+                            }
+                        };
 
-                        let payload_id = resp["id"].as_str().unwrap().parse::<u64>().unwrap();
-                        
+                        // Payload ID can come in as "1" or just 1
+                        let payload_id: u64 = match &resp["id"] {
+                            serde_json::Value::Number(number) => {
+                                if let Some(payload_id) = number.as_u64() {
+                                    payload_id
+                                } else {
+                                    tracing::error!("Invalid payload ID format: {}", number);
+                                    return;
+                                }
+                            }
+                            serde_json::Value::String(s) => match s.parse::<u64>() {
+                                Ok(parsed_id) => parsed_id,
+                                Err(e) => {
+                                    tracing::error!("Error parsing payload ID as u64: {}", e);
+                                    return;
+                                }
+                            },
+                            _ => {
+                                tracing::error!("Unexpected payload ID format: {:?}", resp["id"]);
+                                return;
+                            }
+                        };
+
                         if let Some(tx) = write_reqmap.lock().await.reqmap.remove(&payload_id) {
-                            tx.send(msg).unwrap();
+                            let channelres = tx.send(msg);
+                            if let Err(e) = channelres {
+                                tracing::error!("Error sending message to channel: {}", e);
+                            }
                         } else {
                             tracing::warn!("No corresponding sender found for payload_id: {}", payload_id);
                         }
