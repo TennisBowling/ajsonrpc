@@ -1,6 +1,6 @@
 [package]
 name = "ajsonrpc"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 authors = ["TennisBowling <tennisbowling@tennisbowling.com>"]
 description = "A performance oriented websocket json-rpc router"

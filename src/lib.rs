@@ -7,8 +7,7 @@ use tokio::{sync::oneshot, net::TcpStream, sync::Mutex};
 use http::{Request, Uri};
 
 
-fn drop<T>(_: T) {}
-
+#[derive(Debug)]
 pub enum WsError {
     Timeout,
     Other(Box<dyn Error>),
@@ -27,7 +26,17 @@ impl WsRouter {
     pub async fn new(node: String) -> Result<WsRouter, Box<dyn Error>> {
         let url = Uri::from_str(&node)?;
 
-        let (ws, _) = tokio_tungstenite::connect_async(url).await?;
+        #[allow(deprecated)]
+        let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig {
+            write_buffer_size: 0,
+            max_message_size: None,
+            max_frame_size: None,
+            max_write_buffer_size: usize::MAX,
+            accept_unmasked_frames: false,
+            max_send_queue: None,   // deprecated
+        };
+
+        let (ws, _) = tokio_tungstenite::connect_async_with_config(url, Some(config), false).await?;
         let (ws_write, ws_read) = ws.split();
         tracing::info!("Websocket connection to {} established.", node);
 
@@ -120,8 +129,18 @@ impl WsRouter {
             .header("Host", url.host().unwrap())
             .body(())?;
             
+        
+        #[allow(deprecated)]
+        let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig {
+            write_buffer_size: 0,
+            max_message_size: None,
+            max_frame_size: None,
+            max_write_buffer_size: usize::MAX,
+            accept_unmasked_frames: false,
+            max_send_queue: None,   // deprecated
+        };
 
-        let (ws, _) = tokio_tungstenite::connect_async(request).await?;
+        let (ws, _) = tokio_tungstenite::connect_async_with_config(request, Some(config), false).await?;
         let (ws_write, ws_read) = ws.split();
         tracing::info!("Websocket connection to {} established.", node);
 
@@ -222,5 +241,11 @@ impl WsRouter {
     pub async fn make_request_timeout(&self, req: String, payload_id: u64, timeout: Duration) -> Result<String, WsError> {
         let rx = self.send(req, payload_id).await?;
         tokio::time::timeout(timeout, rx).await.map_err(|_| WsError::Timeout)?.map_err(|e| WsError::Other(Box::new(e)))
+    }
+
+    pub async fn stop(&self) {
+        tracing::debug!("Shutting down websocket connection.");
+        // call close on the websocket connection
+        self.write_reqmap.lock().await.ws_write.close().await.unwrap();
     }
 }
