@@ -1,7 +1,7 @@
 use std::{collections::HashMap, error::Error, sync::Arc, time::Duration, str::FromStr};
 use futures::{stream::SplitSink, SinkExt};
 use futures_util::StreamExt;
-use tokio_tungstenite::{WebSocketStream, MaybeTlsStream, tungstenite::Message};
+use tokio_tungstenite::{WebSocketStream, MaybeTlsStream, tungstenite::{Message, self}};
 use tracing;
 use tokio::{sync::oneshot, net::TcpStream, sync::Mutex};
 use http::{Request, Uri};
@@ -10,7 +10,21 @@ use http::{Request, Uri};
 #[derive(Debug)]
 pub enum WsError {
     Timeout,
+    ConnectionClosed,
+    AlreadyClosed,
+    IoError(std::io::Error),
     Other(Box<dyn Error>),
+}
+
+impl From<tungstenite::error::Error> for WsError {
+    fn from(e: tungstenite::error::Error) -> Self {
+        match e {
+            tungstenite::error::Error::ConnectionClosed => WsError::ConnectionClosed,
+            tungstenite::error::Error::AlreadyClosed => WsError::AlreadyClosed,
+            tungstenite::error::Error::Io(e) => WsError::IoError(e),
+            _ => WsError::Other(Box::new(e)),
+        }
+    }
 }
 
 struct WriteReqmap {
@@ -228,14 +242,14 @@ impl WsRouter {
         let mut write_reqmap = self.write_reqmap.lock().await;
         write_reqmap.reqmap.insert(payload_id, tx);
         // send the req to the node
-        write_reqmap.ws_write.send(req).await.map_err(|e| WsError::Other(Box::new(e)))?;
+        write_reqmap.ws_write.send(req).await?;
         drop(write_reqmap); // drop here to yield the lock as soon as possible
         Ok(rx)
     }
 
     // makes + waits for response
     pub async fn make_request(&self, req: String, payload_id: u64) -> Result<String, WsError> {
-        Ok(self.send(req, payload_id).await?.await.map_err(|e| WsError::Other(Box::new(e))))?
+        Ok(self.send(req, payload_id).await?.await.map_err(|e| WsError::Other(Box::new(e)))?)
     }
 
     pub async fn make_request_timeout(&self, req: String, payload_id: u64, timeout: Duration) -> Result<String, WsError> {
