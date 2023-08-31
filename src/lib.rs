@@ -13,7 +13,7 @@ pub enum WsError {
     ConnectionClosed,
     AlreadyClosed,
     IoError(std::io::Error),
-    Other(Box<dyn Error>),
+    Other(Box<dyn Error + Send + Sync>),
 }
 
 impl From<tungstenite::error::Error> for WsError {
