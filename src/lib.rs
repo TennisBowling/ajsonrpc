@@ -6,6 +6,8 @@ use tracing;
 use tokio::{sync::oneshot, net::TcpStream, sync::Mutex};
 use http::{Request, Uri};
 
+pub mod websocketlite;
+
 
 #[derive(Debug)]
 pub enum WsError {
@@ -37,8 +39,8 @@ pub struct WsRouter {
 }
 
 impl WsRouter {
-    pub async fn new(node: String) -> Result<WsRouter, Box<dyn Error>> {
-        let url = Uri::from_str(&node)?;
+    pub async fn new(node: &str, jwt: Option<String>) -> Result<WsRouter, Box<dyn Error>> {
+        let url = Uri::from_str(node)?;
 
         #[allow(deprecated)]
         let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig {
@@ -50,109 +52,22 @@ impl WsRouter {
             max_send_queue: None,   // deprecated
         };
 
-        let (ws, _) = tokio_tungstenite::connect_async_with_config(url, Some(config), false).await?;
-        let (ws_write, ws_read) = ws.split();
-        tracing::info!("Websocket connection to {} established.", node);
-
-        let write_reqmap = Arc::new(Mutex::new(WriteReqmap{
-            ws_write,
-            reqmap: HashMap::new(),
-        }));
-        let write_reqmap_clone = write_reqmap.clone(); // Clone for closure
-
-        let router = WsRouter{
-            write_reqmap: write_reqmap,
-        };
-        
-        let read_loop = ws_read.for_each_concurrent(None, move |msg| {
-            let write_reqmap = write_reqmap_clone.clone(); // Clone for closure
-            
-            async move {
-                match msg {
-                    Ok(msg) => {
-                        let msg = msg.into_text().unwrap();
-
-                        if msg.is_empty() {
-                            return;
-                        }
-
-                        let resp: Result<serde_json::Value, serde_json::Error>  = serde_json::from_str(&msg);
-                        let resp = match resp {
-                            Ok(resp) => resp,
-                            Err(e) => {
-                                tracing::error!("Error parsing message: {}", e);
-                                return;
-                            }
-                        };
-
-                        // Payload ID can come in as "1" or just 1
-                        let payload_id: u64 = match &resp["id"] {
-                            serde_json::Value::Number(number) => {
-                                if let Some(payload_id) = number.as_u64() {
-                                    payload_id
-                                } else {
-                                    tracing::error!("Invalid payload ID format: {}", number);
-                                    return;
-                                }
-                            }
-                            serde_json::Value::String(s) => match s.parse::<u64>() {
-                                Ok(parsed_id) => parsed_id,
-                                Err(e) => {
-                                    tracing::error!("Error parsing payload ID as u64: {}", e);
-                                    return;
-                                }
-                            },
-                            _ => {
-                                tracing::error!("Unexpected payload ID format: {:?}", resp["id"]);
-                                return;
-                            }
-                        };
-
-                        if let Some(tx) = write_reqmap.lock().await.reqmap.remove(&payload_id) {
-                            let channelres = tx.send(msg);
-                            if let Err(e) = channelres {
-                                tracing::error!("Error sending message to channel: {}", e);
-                            }
-                        } else {
-                            tracing::warn!("No corresponding sender found for payload_id: {}", payload_id);
-                        }
-                    },
-                    Err(e) => {
-                        tracing::error!("Error reading message: {}", e);
-                    }
-                }
-            }
-        });
-
-        tokio::spawn(read_loop);
-
-        Ok(router)
-    }
-
-     pub async fn new_with_jwt(node: String, jwt: String) -> Result<WsRouter, Box<dyn Error>> {
-        let url = Uri::from_str(&node)?;
-
-        let request = Request::builder()
+        let mut request = Request::builder()
             .method("GET")
             .uri(&url)
             .header("Upgrade", "websocket")
             .header("Connection", "Upgrade")
             .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
             .header("Sec-WebSocket-Version", "13")
-            .header("Authorization", format!("Bearer {}", jwt))
-            .header("Host", url.host().unwrap())
-            .body(())?;
+            .header("Host", url.host().unwrap());
+
+        if let Some(jwt) = jwt {
+            request = request.header("Authorization", format!("Bearer {}", jwt));
+        }
+        
+        let request = request.body(())?;
             
         
-        #[allow(deprecated)]
-        let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig {
-            write_buffer_size: 0,
-            max_message_size: None,
-            max_frame_size: None,
-            max_write_buffer_size: usize::MAX,
-            accept_unmasked_frames: false,
-            max_send_queue: None,   // deprecated
-        };
 
         let (ws, _) = tokio_tungstenite::connect_async_with_config(request, Some(config), false).await?;
         let (ws_write, ws_read) = ws.split();
