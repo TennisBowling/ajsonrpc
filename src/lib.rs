@@ -7,6 +7,7 @@ use tokio::{sync::oneshot, net::TcpStream, sync::Mutex};
 use http::{Request, Uri};
 
 pub mod websocketlite;
+pub mod ipc;
 
 
 #[derive(Debug)]
